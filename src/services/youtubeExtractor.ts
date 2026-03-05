@@ -67,14 +67,35 @@ export interface YouTubeExtractionResult {
 // Constants — matching the Kotlin extractor exactly
 // ---------------------------------------------------------------------------
 
-// Used for all GET requests (watch page, HLS manifest fetch)
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
+// Innertube client configs — we use Android (no cipher, direct URLs)
+// and web as fallback (may need cipher decode)
+// Note: ?key= param was deprecated by YouTube in mid-2023 and is no longer sent.
+const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player';
 
-const DEFAULT_HEADERS: Record<string, string> = {
-  'accept-language': 'en-US,en;q=0.9',
-  'user-agent': DEFAULT_USER_AGENT,
+// Android client gives direct URLs without cipher obfuscation
+const ANDROID_CLIENT_CONTEXT = {
+  client: {
+    clientName: 'ANDROID',
+    clientVersion: '19.44.41',
+    androidSdkVersion: 30,
+    userAgent:
+      'com.google.android.youtube/19.44.41 (Linux; U; Android 11) gzip',
+    hl: 'en',
+    gl: 'US',
+  },
+};
+
+// iOS client as secondary fallback
+const IOS_CLIENT_CONTEXT = {
+  client: {
+    clientName: 'IOS',
+    clientVersion: '19.45.4',
+    deviceModel: 'iPhone16,2',
+    userAgent:
+      'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)',
+    hl: 'en',
+    gl: 'US',
+  },
 };
 
 const PREFERRED_ADAPTIVE_CLIENT = 'android_vr';
@@ -328,37 +349,36 @@ async function fetchWatchConfig(videoId: string): Promise<WatchConfig> {
 
 async function fetchPlayerResponse(
   videoId: string,
-  client: ClientDef,
-  apiKey: string | null,
-  visitorData: string | null,
-): Promise<PlayerResponse | null> {
+  context: object,
+  userAgent: string,
+  clientNameId: string = '3'
+): Promise<InnertubePlayerResponse | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  const endpoint = apiKey
-    ? `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`
-    : `https://www.youtube.com/youtubei/v1/player?prettyPrint=false`;
+  try {
+    const body = {
+      videoId,
+      context,
+      contentCheckOk: true,
+      racyCheckOk: true,
+    };
 
-  const headers: Record<string, string> = {
-    ...DEFAULT_HEADERS,
-    'content-type': 'application/json',
-    'origin': 'https://www.youtube.com',
-    'referer': `https://www.youtube.com/watch?v=${videoId}`,
-    'x-youtube-client-name': client.id,
-    'x-youtube-client-version': client.version,
-    'user-agent': client.userAgent,
-  };
-  if (visitorData) headers['x-goog-visitor-id'] = visitorData;
-
-  const body = JSON.stringify({
-    videoId,
-    contentCheckOk: true,
-    racyCheckOk: true,
-    context: { client: client.context },
-    playbackContext: {
-      contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' },
-    },
-  });
+    const response = await fetch(
+      `${INNERTUBE_URL}?prettyPrint=false`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': userAgent,
+          'X-YouTube-Client-Name': clientNameId,
+          'Origin': 'https://www.youtube.com',
+          'Referer': `https://www.youtube.com/watch?v=${videoId}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }
+    );
 
   try {
     const res = await fetch(endpoint, {
@@ -597,13 +617,48 @@ export class YouTubeExtractor {
       return null;
     }
 
-    const effectivePlatform = platform ?? (Platform.OS === 'android' ? 'android' : 'ios');
+    logger.info('YouTubeExtractor', `Extracting for videoId=${videoId} platform=${platform ?? 'unknown'}`);
 
-    for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-      if (attempt > 1) {
-        const delay = attempt * 300;
-        logger.info('YouTubeExtractor', `Retry attempt ${attempt}/${MAX_RETRIES + 1} after ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+    const clients: Array<{ context: object; userAgent: string; name: string; clientNameId: string }> = [
+      {
+        name: 'ANDROID',
+        clientNameId: '3',
+        context: ANDROID_CLIENT_CONTEXT,
+        userAgent: 'com.google.android.youtube/19.44.41 (Linux; U; Android 11) gzip',
+      },
+      {
+        name: 'IOS',
+        clientNameId: '5',
+        context: IOS_CLIENT_CONTEXT,
+        userAgent: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)',
+      },
+      {
+        name: 'TVHTML5_EMBEDDED',
+        clientNameId: '85',
+        context: TVHTML5_EMBEDDED_CONTEXT,
+        userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0)',
+      },
+      {
+        name: 'WEB_EMBEDDED',
+        clientNameId: '56',
+        context: WEB_EMBEDDED_CONTEXT,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+      },
+    ];
+
+    let muxedFormats: InnertubeFormat[] = [];
+    let adaptiveFormats: InnertubeFormat[] = [];
+    let playerResponse: InnertubePlayerResponse | null = null;
+
+    for (const client of clients) {
+      logger.info('YouTubeExtractor', `Trying ${client.name} client...`);
+      const resp = await fetchPlayerResponse(videoId, client.context, client.userAgent, client.clientNameId);
+      if (!resp) continue;
+
+      const status = resp.playabilityStatus?.status;
+      if (status === 'UNPLAYABLE' || status === 'LOGIN_REQUIRED') {
+        logger.warn('YouTubeExtractor', `${client.name}: playabilityStatus=${status}`);
+        continue;
       }
       const result = await this.extractOnce(videoId, effectivePlatform);
       if (result) return result;
