@@ -40,6 +40,7 @@ const MalSettingsScreen: React.FC = () => {
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(mmkvStorage.getBoolean('mal_auto_update') ?? true);
   const [autoAddEnabled, setAutoAddEnabled] = useState(mmkvStorage.getBoolean('mal_auto_add') ?? true);
   const [autoLibrarySyncEnabled, setAutoLibrarySyncEnabled] = useState(mmkvStorage.getBoolean('mal_auto_sync_to_library') ?? false);
+  const [includeNsfwEnabled, setIncludeNsfwEnabled] = useState(mmkvStorage.getBoolean('mal_include_nsfw') ?? true);
 
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertTitle, setAlertTitle] = useState('');
@@ -143,6 +144,11 @@ const MalSettingsScreen: React.FC = () => {
   const toggleAutoLibrarySync = (val: boolean) => {
       setAutoLibrarySyncEnabled(val);
       mmkvStorage.setBoolean('mal_auto_sync_to_library', val);
+  };
+
+  const toggleIncludeNsfw = (val: boolean) => {
+      setIncludeNsfwEnabled(val);
+      mmkvStorage.setBoolean('mal_include_nsfw', val);
   };
 
   return (
@@ -408,6 +414,25 @@ const MalSettingsScreen: React.FC = () => {
                                 onValueChange={toggleAutoLibrarySync}
                                 trackColor={{ false: currentTheme.colors.border, true: currentTheme.colors.primary + '80' }}
                                 thumbColor={autoLibrarySyncEnabled ? currentTheme.colors.white : currentTheme.colors.mediumEmphasis}
+                            />
+                        </View>
+                    </View>
+
+                    <View style={styles.settingItem}>
+                        <View style={styles.settingContent}>
+                            <View style={styles.settingTextContainer}>
+                                <Text style={[styles.settingLabel, { color: currentTheme.colors.highEmphasis }]}>
+                                    Include NSFW Content
+                                </Text>
+                                <Text style={[styles.settingDescription, { color: currentTheme.colors.mediumEmphasis }]}>
+                                    Allow NSFW entries to be returned when fetching your MAL list.
+                                </Text>
+                            </View>
+                            <Switch
+                                value={includeNsfwEnabled}
+                                onValueChange={toggleIncludeNsfw}
+                                trackColor={{ false: currentTheme.colors.border, true: currentTheme.colors.primary + '80' }}
+                                thumbColor={includeNsfwEnabled ? currentTheme.colors.white : currentTheme.colors.mediumEmphasis}
                             />
                         </View>
                     </View>

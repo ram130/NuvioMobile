@@ -221,7 +221,7 @@ class WatchedService {
             const malToken = MalAuth.getToken();
             if (malToken) {
                 MalSync.scrobbleEpisode(
-                    imdbId, 
+                    '', // Don't use IMDb ID as title fallback (unlikely to match)
                     1, 
                     1, 
                     'movie', 

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { mmkvStorage } from '../mmkvStorage';
 import { MalAuth } from './MalAuth';
 import { MalAnimeNode, MalListStatus, MalUserListResponse, MalSearchResult, MalUser } from '../../types/mal';
 
@@ -39,7 +40,7 @@ export const MalApiService = {
           limit,
           offset,
           sort: 'list_updated_at',
-          nsfw: true // Ensure all content is returned
+          nsfw: mmkvStorage.getBoolean('mal_include_nsfw') ?? true
         },
       });
       return response.data;
